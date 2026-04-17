@@ -1,0 +1,31 @@
+{
+  "name": "ozybase",
+  "version": "1.0.0",
+  "description": "OzyBase CLI - Backend-as-a-Service and MCP Bridge",
+  "license": "MIT",
+  "main": "index.js",
+  "bin": {
+    "ozybase": "./index.js"
+  },
+  "files": [
+    "bin/",
+    "index.js",
+    "README.md"
+  ],
+  "scripts": {
+    "prepack": "node ./scripts/validate-package.js",
+    "pack:dry": "npm pack --dry-run"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "publishConfig": {
+    "access": "public"
+  },
+  "keywords": [
+    "ozybase",
+    "mcp",
+    "bridge",
+    "cli"
+  ]
+}
