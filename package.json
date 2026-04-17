@@ -4,9 +4,7 @@
   "description": "OzyBase CLI - Backend-as-a-Service and MCP Bridge",
   "license": "MIT",
   "main": "index.js",
-  "bin": {
-    "ozybase": "./index.js"
-  },
+  "bin": "index.js",
   "files": [
     "bin/",
     "index.js",
