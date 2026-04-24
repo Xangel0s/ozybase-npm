@@ -1,16 +1,19 @@
 {
   "name": "ozybase",
-  "version": "1.0.0",
-  "description": "OzyBase CLI - Backend-as-a-Service command wrapper",
+  "version": "1.2.3",
+  "description": "OzyBase CLI - one-time project connection and native MCP bootstrap",
   "license": "MIT",
   "main": "index.js",
-  "bin": "index.js",
+  "bin": {
+    "ozybase": "index.js"
+  },
   "files": [
     "bin/",
     "index.js",
     "README.md"
   ],
   "scripts": {
+    "build:binaries:all": "node ./scripts/build-binaries.js",
     "prepack": "node ./scripts/validate-package.js",
     "pack:dry": "npm pack --dry-run"
   },
@@ -22,6 +25,8 @@
   },
   "keywords": [
     "ozybase",
+    "mcp",
+    "connect",
     "cli"
   ]
 }
