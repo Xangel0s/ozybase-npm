@@ -1,7 +1,7 @@
 {
   "name": "ozybase",
   "version": "1.0.0",
-  "description": "OzyBase CLI - Backend-as-a-Service and MCP Bridge",
+  "description": "OzyBase CLI - Backend-as-a-Service command wrapper",
   "license": "MIT",
   "main": "index.js",
   "bin": "index.js",
@@ -22,8 +22,6 @@
   },
   "keywords": [
     "ozybase",
-    "mcp",
-    "bridge",
     "cli"
   ]
 }
