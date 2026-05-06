@@ -3,12 +3,14 @@ const { spawn, spawnSync } = require('child_process');
 const crypto = require('crypto');
 const fs = require('fs');
 const http = require('http');
+const https = require('https');
 const os = require('os');
 const path = require('path');
 
 const DEFAULT_SERVER_NAME = 'ozybase';
 const DEFAULT_MCP_URL = 'https://YOUR_DOMAIN/api/project/mcp';
 const DEFAULT_API_KEY_ENV = 'OZYBASE_API_KEY';
+const DEFAULT_MCP_TOKEN_ENV = 'OZYBASE_MCP_TOKEN';
 const USE_COLOR = process.stdout.isTTY && process.env.NO_COLOR !== '1';
 const ANSI = {
   reset: '\x1b[0m',
@@ -28,17 +30,17 @@ function color(style, value) {
   return `${ANSI[style] || ''}${value}${ANSI.reset}`;
 }
 
-function brand() {
-  return `${color('cyan', 'OzyBase')} ${color('gray', 'MCP Setup')}`;
+function printBanner() {
+  console.log('  OOOOO   ZZZZZ   Y   Y   BBBB    AAA    SSSS   EEEEE');
+  console.log('  O   O      Z    Y Y     B   B  A   A  S      E');
+  console.log('  O   O     Z      Y      BBBB   AAAAA   SSS   EEEE');
+  console.log('  O   O    Z       Y      B   B  A   A      S  E');
+  console.log('  OOOOO   ZZZZZ    Y      BBBB   A   A  SSSS   EEEEE');
+  console.log('');
 }
 
-function printHeader(subtitle) {
-  console.log('');
-  console.log(color('cyan', 'OzyBase'));
-  console.log(color('gray', 'Native CLI + secure MCP workspace bootstrap'));
-  if (subtitle) {
-    console.log(color('bold', subtitle));
-  }
+function printHeader() {
+  printBanner();
   console.log('');
 }
 
@@ -147,18 +149,18 @@ function parseOptions(args, schema = {}) {
 }
 
 function printUsage() {
-  printHeader('Workspace MCP, without copy-paste config.');
+  printHeader();
   printPanel('Usage', [
-    ['init', 'ozybase init --url <mcp-url> [--skills] [--yes]'],
-    ['doctor', 'ozybase doctor [--json]'],
-    ['repair', 'ozybase repair --url <mcp-url> [--skills] [--yes]'],
+    ['connect', 'ozybase connect --url <mcp-url> [--yes]'],
+    ['doctor', 'ozybase doctor [--connect] [--json]'],
+    ['repair', 'ozybase repair --url <mcp-url> [--yes]'],
     ['native', 'ozybase <native-command> [...args]'],
   ], color('gray', 'Unknown commands are passed to the packaged native OzyBase binary.'));
   printPanel('Examples', [
-    ['safe setup', 'npx ozybase init --url https://example.com/api/project/mcp --skills'],
-    ['CI setup', 'npx ozybase init --url https://example.com/api/project/mcp --skills --yes'],
-    ['diagnose', 'npx ozybase doctor'],
-    ['bridge', 'npx ozybase mcp bridge --url https://example.com/api/project/mcp'],
+    ['safe setup', 'npx ozybase connect --url https://example.com/api/project/mcp'],
+    ['CI setup', 'npx ozybase connect --url https://example.com/api/project/mcp --yes'],
+    ['diagnose', 'npx ozybase doctor --connect'],
+    ['native MCP', 'npx ozybase mcp serve --url https://example.com/api/project/mcp'],
   ]);
 }
 
@@ -374,7 +376,7 @@ function renderConfirmationPage(summary, token) {
         <div class="card"><div class="label">Config block</div><div class="value">${escapeHtml(summary.blockName)}.${escapeHtml(summary.serverName)}</div></div>
         <div class="card"><div class="label">API key source</div><div class="value">${escapeHtml(summary.apiKeyEnv)} from env</div></div>
       </div>
-      <div class="card"><div class="label">Bridge command</div><div class="value">npx -y ozybase mcp bridge --url ${escapeHtml(summary.urlInfo.url)}</div></div>
+      <div class="card"><div class="label">MCP command</div><div class="value">npx -y ozybase mcp serve --url ${escapeHtml(summary.urlInfo.url)}</div></div>
       <div>${warnings}</div>
     </section>
     <div class="actions">
@@ -398,9 +400,14 @@ function waitForBrowserConfirmation(summary) {
       server.close(() => reject(new Error('MCP setup confirmation timed out.')));
     }, 10 * 60 * 1000);
 
+    let settled = false;
     const finish = (ok, res) => {
+      if (settled) {
+        return;
+      }
+      settled = true;
       clearTimeout(timeout);
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' });
       res.end(`<!doctype html><html lang="en"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>OzyBase MCP Setup</title><style>
         :root { --color-surface: #09090b; --color-border: #27272a; --color-muted: #18181b; --color-foreground: #fafafa; --color-muted-foreground: #71717a; --radius-lg: 0.5rem; }
         body { font-family: "Inter", system-ui, sans-serif; background: #09090b; color: var(--color-foreground); display: grid; place-items: center; min-height: 100vh; margin: 0; padding: 32px; }
@@ -409,13 +416,18 @@ function waitForBrowserConfirmation(summary) {
         h1 { margin: 0 0 8px; font-size: 20px; font-weight: 600; }
         p { color: var(--color-muted-foreground); margin: 0; font-size: 14px; }
       </style></head><body><main><h1>${ok ? 'OzyBase MCP setup approved' : 'OzyBase MCP setup cancelled'}</h1><p>You can close this tab and return to your terminal.</p></main></body></html>`);
-      server.close(() => (ok ? resolve() : reject(new Error('MCP setup cancelled by user.'))));
+      if (ok) {
+        resolve();
+      } else {
+        reject(new Error('MCP setup cancelled by user.'));
+      }
+      server.close(() => {});
     };
 
     const server = http.createServer((req, res) => {
       const requestUrl = new URL(req.url, 'http://127.0.0.1');
       if (requestUrl.searchParams.get('token') !== token) {
-        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8', Connection: 'close' });
         res.end('Invalid confirmation token.');
         return;
       }
@@ -428,19 +440,22 @@ function waitForBrowserConfirmation(summary) {
         return;
       }
       if (req.method === 'GET' && requestUrl.pathname === '/') {
-        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
+        res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', Connection: 'close' });
         res.end(renderConfirmationPage(summary, token));
         return;
       }
-      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8', Connection: 'close' });
       res.end('Not found.');
     });
+
+    server.keepAliveTimeout = 1000;
+    server.requestTimeout = 5000;
 
     server.on('error', reject);
     server.listen(0, '127.0.0.1', () => {
       const address = server.address();
       const confirmUrl = `http://127.0.0.1:${address.port}/?token=${encodeURIComponent(token)}`;
-      printHeader('Browser confirmation required');
+      printHeader();
       printPanel('Review Before Writing', [
         ['MCP origin', summary.urlInfo.origin],
         ['Workspace', summary.workspaceRoot],
@@ -488,8 +503,8 @@ function detectMcpBlock(config, workspaceRoot, editorOverride) {
   return 'servers';
 }
 
-function buildMcpServer({ url, header, apiKeyEnv }) {
-  const args = ['-y', 'ozybase', 'mcp', 'bridge', '--url', url];
+function buildMcpServer({ url, header, apiKeyEnv, token }) {
+  const args = ['-y', 'ozybase', 'mcp', 'serve', '--url', url];
   if (header && header !== 'apikey') {
     args.push('--header', header);
   }
@@ -498,9 +513,256 @@ function buildMcpServer({ url, header, apiKeyEnv }) {
     command: 'npx',
     args,
     env: {
-      [apiKeyEnv]: `\${env:${apiKeyEnv}}`,
+      [apiKeyEnv]: token || `\${env:${apiKeyEnv}}`,
     },
   };
+}
+
+function deviceEndpoint(mcpURL, suffix) {
+  const parsed = new URL(mcpURL);
+  return `${parsed.origin}/api/project/mcp/device/${suffix}`;
+}
+
+function extractConfiguredMcpURL(config, serverName = DEFAULT_SERVER_NAME) {
+  const candidates = [config?.servers?.[serverName], config?.mcpServers?.[serverName]].filter(Boolean);
+  for (const server of candidates) {
+    if (!server || !Array.isArray(server.args)) {
+      continue;
+    }
+    const urlIndex = server.args.findIndex((arg) => String(arg) === '--url');
+    if (urlIndex !== -1 && server.args[urlIndex + 1]) {
+      return String(server.args[urlIndex + 1]);
+    }
+  }
+  return '';
+}
+
+function extractConfiguredMcpToken(config, serverName = DEFAULT_SERVER_NAME) {
+  return extractConfiguredMcpAuth(config, serverName).token;
+}
+
+function extractConfiguredMcpAuth(config, serverName = DEFAULT_SERVER_NAME) {
+  const candidates = [config?.servers?.[serverName], config?.mcpServers?.[serverName]].filter(Boolean);
+  for (const server of candidates) {
+    const env = server?.env && typeof server.env === 'object' ? server.env : null;
+    if (!env) {
+      continue;
+    }
+    const token = String(env[DEFAULT_MCP_TOKEN_ENV] || '').trim();
+    if (token && !token.includes('${env:')) {
+      return { envName: DEFAULT_MCP_TOKEN_ENV, token };
+    }
+    const apiKey = String(env[DEFAULT_API_KEY_ENV] || '').trim();
+    if (apiKey && !apiKey.includes('${env:')) {
+      return { envName: DEFAULT_API_KEY_ENV, token: apiKey };
+    }
+  }
+  return { envName: DEFAULT_MCP_TOKEN_ENV, token: '' };
+}
+
+function requestJSON(url, { headers = {}, body, timeout = 8000 } = {}) {
+  const parsed = new URL(url);
+  const transport = parsed.protocol === 'https:' ? https : http;
+  const payload = body ? Buffer.from(JSON.stringify(body)) : null;
+
+  return new Promise((resolve, reject) => {
+    const req = transport.request(parsed, {
+      method: payload ? 'POST' : 'GET',
+      headers: {
+        Accept: 'application/json, text/event-stream',
+        ...(payload ? { 'Content-Type': 'application/json', 'Content-Length': String(payload.length) } : {}),
+        ...headers,
+      },
+      timeout,
+    }, (res) => {
+      const chunks = [];
+      res.on('data', (chunk) => chunks.push(chunk));
+      res.on('end', () => {
+        const text = Buffer.concat(chunks).toString('utf8').trim();
+        let json = null;
+        if (text) {
+          try {
+            json = JSON.parse(text);
+          } catch (_) {
+            // Keep raw text for diagnostics below.
+          }
+        }
+        resolve({ statusCode: res.statusCode || 0, headers: res.headers, text, json });
+      });
+    });
+
+    req.on('timeout', () => req.destroy(new Error(`request timed out after ${timeout}ms`)));
+    req.on('error', reject);
+    if (payload) {
+      req.write(payload);
+    }
+    req.end();
+  });
+}
+
+async function validateMcpConnection({ url, apiKey, header = 'apikey', timeout = 8000 }) {
+  const checks = [];
+  const clientName = 'OzyBaseNPMDoctor/1.0';
+  const headers = {
+    [header]: apiKey,
+    'X-Client-Name': clientName,
+  };
+
+  const initializePayload = {
+    jsonrpc: '2.0',
+    id: 1,
+    method: 'initialize',
+    params: {
+      protocolVersion: '2025-06-18',
+      clientInfo: { name: clientName, version: '1.0.0' },
+    },
+  };
+
+  try {
+    const initialize = await requestJSON(url, { headers, body: initializePayload, timeout });
+    const ok = initialize.statusCode >= 200 && initialize.statusCode < 300 && initialize.json && !initialize.json.error;
+    checks.push({ name: 'mcpInitialize', ok, detail: ok ? 'JSON-RPC initialize accepted' : `HTTP ${initialize.statusCode}: ${initialize.json?.error?.message || initialize.text || 'no response body'}` });
+    if (!ok) {
+      return { ok: false, status: 'failed', checks };
+    }
+  } catch (error) {
+    checks.push({ name: 'mcpInitialize', ok: false, detail: error.message });
+    return { ok: false, status: 'failed', checks };
+  }
+
+  const toolsPayload = { jsonrpc: '2.0', id: 2, method: 'tools/list', params: {} };
+  try {
+    const tools = await requestJSON(url, { headers, body: toolsPayload, timeout });
+    const pendingApproval = tools.statusCode === 403 && String(tools.json?.error?.message || '').toLowerCase().includes('pending approval');
+    const ok = tools.statusCode >= 200 && tools.statusCode < 300 && tools.json && !tools.json.error;
+    checks.push({
+      name: 'mcpToolsList',
+      ok: ok || pendingApproval,
+      detail: ok
+        ? `${Array.isArray(tools.json?.result?.tools) ? tools.json.result.tools.length : 0} tools available`
+        : pendingApproval
+          ? 'agent session registered; approval required in OzyBase'
+          : `HTTP ${tools.statusCode}: ${tools.json?.error?.message || tools.text || 'no response body'}`,
+    });
+    if (!ok && !pendingApproval) {
+      return { ok: false, status: 'failed', checks };
+    }
+  } catch (error) {
+    checks.push({ name: 'mcpToolsList', ok: false, detail: error.message });
+    return { ok: false, status: 'failed', checks };
+  }
+
+  const healthPayload = { jsonrpc: '2.0', id: 3, method: 'tools/call', params: { name: 'system.health', arguments: {} } };
+  try {
+    const health = await requestJSON(url, { headers, body: healthPayload, timeout });
+    const message = String(health.json?.error?.message || health.json?.error || health.text || '').toLowerCase();
+    const pendingApproval = health.statusCode === 403 && (message.includes('pending approval') || message.includes('forbidden'));
+    const ok = health.statusCode >= 200 && health.statusCode < 300 && health.json && !health.json.error && !health.json?.result?.isError;
+    checks.push({
+      name: 'mcpToolCall',
+      ok: ok || pendingApproval,
+      detail: ok
+        ? 'system.health executed through tools/call'
+        : pendingApproval
+          ? 'execution requires agent approval in OzyBase'
+          : `HTTP ${health.statusCode}: ${health.json?.error?.message || health.json?.error || health.text || 'no response body'}`,
+    });
+    return { ok: ok || pendingApproval, status: pendingApproval ? 'pending_approval' : 'connected', checks };
+  } catch (error) {
+    checks.push({ name: 'mcpToolCall', ok: false, detail: error.message });
+    return { ok: false, status: 'failed', checks };
+  }
+}
+
+function printConnectionValidation(result, apiKeyEnv) {
+  printPanel('MCP Connection Validation', [
+    ['Status', result.status],
+    ...result.checks.map((check) => [check.name, `${check.ok ? 'OK' : 'ERR'} ${check.detail}`]),
+  ], result.status === 'pending_approval'
+    ? color('yellow', 'Next: approve the new MCP agent in OzyBase, then reload your editor MCP session.')
+    : result.ok
+      ? color('green', 'MCP backend handshake is healthy. Reload the editor if Agent Forge still shows disconnected.')
+      : color('yellow', `Check ${apiKeyEnv}, backend availability, and the MCP URL.`));
+}
+
+async function authorizeMcpDevice({ urlInfo, workspaceRoot, editor, securityLevel, dashboardURL, quiet = false }) {
+  const start = await requestJSON(deviceEndpoint(urlInfo.url, 'start'), {
+    body: {
+      workspace_path: workspaceRoot,
+      mcp_url: urlInfo.url,
+      dashboard_url: dashboardURL,
+      client: 'ozybase-npm',
+      editor,
+      security_level: securityLevel || 'Restricted',
+      requested_scopes: ['mcp:tools', 'mcp:skills'],
+    },
+    timeout: 8000,
+  });
+  if (start.statusCode < 200 || start.statusCode >= 300 || !start.json?.device_code) {
+    throw new Error(`device authorization start failed: ${start.json?.error || start.text || `HTTP ${start.statusCode}`}`);
+  }
+
+  const deviceCode = String(start.json.device_code);
+  const verificationURI = String(start.json.verification_uri || '');
+  const interval = Math.max(1, Number(start.json.interval || 2));
+  const expiresIn = Math.max(30, Number(start.json.expires_in || 600));
+  if (!quiet) {
+    printPanel('Authorize In OzyBase Dashboard', [
+      ['User code', String(start.json.user_code || '')],
+      ['Dashboard', verificationURI],
+      ['Expires in', `${expiresIn}s`],
+    ], color('yellow', 'Approve the request in your browser to issue a dedicated MCP token.'));
+  }
+  if (verificationURI) {
+    openBrowser(verificationURI);
+  }
+
+  const deadline = Date.now() + expiresIn * 1000;
+  const startedAt = Date.now();
+  let attempts = 0;
+  let lastNoticeAt = 0;
+  if (!quiet) {
+    console.log(`${color('yellow', 'Waiting')} Dashboard approval pending...`);
+  }
+  while (Date.now() < deadline) {
+    if (attempts > 0) {
+      await new Promise((resolve) => setTimeout(resolve, interval * 1000));
+    }
+    attempts += 1;
+    const status = await requestJSON(`${deviceEndpoint(urlInfo.url, 'status')}?device_code=${encodeURIComponent(deviceCode)}`, { timeout: 8000 });
+    if (status.statusCode < 200 || status.statusCode >= 300 || !status.json) {
+      if (!quiet && Date.now() - lastNoticeAt >= 10000) {
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        console.log(`${color('yellow', 'Waiting')} approval pending (${elapsed}s elapsed, attempt ${attempts})`);
+        lastNoticeAt = Date.now();
+      }
+      continue;
+    }
+    const state = String(status.json.status || '').toLowerCase();
+    if (state === 'approved' && status.json.mcp_token) {
+      if (!quiet) {
+        const elapsed = Math.round((Date.now() - startedAt) / 1000);
+        console.log(`${color('green', 'Approved')} MCP token issued after ${elapsed}s.`);
+      }
+      return {
+        token: String(status.json.mcp_token),
+        tokenPrefix: String(status.json.token_prefix || ''),
+        apiKeyID: String(status.json.api_key_id || ''),
+      };
+    }
+    if (state === 'rejected') {
+      throw new Error('MCP authorization rejected in OzyBase dashboard');
+    }
+    if (state === 'expired') {
+      throw new Error('MCP authorization expired before approval');
+    }
+    if (!quiet && Date.now() - lastNoticeAt >= 10000) {
+      const elapsed = Math.round((Date.now() - startedAt) / 1000);
+      console.log(`${color('yellow', 'Waiting')} approval status: ${state || 'pending'} (${elapsed}s elapsed, attempt ${attempts})`);
+      lastNoticeAt = Date.now();
+    }
+  }
+  throw new Error('MCP authorization timed out before approval');
 }
 
 function mergeMcpConfig(config, blockName, serverName, serverConfig) {
@@ -544,6 +806,18 @@ function scaffoldSkills(workspaceRoot, force = false) {
   return skillsDir;
 }
 
+function ensureGitignoreEntry(workspaceRoot, entry) {
+  const gitignorePath = path.join(workspaceRoot, '.gitignore');
+  const existing = fs.existsSync(gitignorePath) ? fs.readFileSync(gitignorePath, 'utf8') : '';
+  const lines = existing.split(/\r?\n/).map((line) => line.trim());
+  if (lines.includes(entry)) {
+    return false;
+  }
+  const prefix = existing && !existing.endsWith('\n') ? '\n' : '';
+  fs.appendFileSync(gitignorePath, `${prefix}${entry}\n`, 'utf8');
+  return true;
+}
+
 async function runInit(args, mode = 'init') {
   const options = parseOptions(args, {
     url: 'value',
@@ -551,6 +825,8 @@ async function runInit(args, mode = 'init') {
     name: 'value',
     header: 'value',
     'api-key-env': 'value',
+    'security-level': 'value',
+    'dashboard-url': 'value',
     cwd: 'value',
   });
 
@@ -569,14 +845,9 @@ async function runInit(args, mode = 'init') {
 
   const serverName = String(options.name || DEFAULT_SERVER_NAME).trim() || DEFAULT_SERVER_NAME;
   const editor = String(options.editor || 'auto').trim().toLowerCase();
+  const dashboardURL = String(options['dashboard-url'] || '').trim().replace(/\/+$/, '');
   const blockName = detectMcpBlock(current.data || {}, workspaceRoot, editor);
-  const apiKeyEnv = String(options['api-key-env'] || DEFAULT_API_KEY_ENV).trim() || DEFAULT_API_KEY_ENV;
-  const serverConfig = buildMcpServer({
-    url: urlInfo.url,
-    header: String(options.header || 'apikey').trim() || 'apikey',
-    apiKeyEnv,
-  });
-  const nextConfig = mergeMcpConfig(current.error ? {} : current.data, blockName, serverName, serverConfig);
+  const apiKeyEnv = String(options['api-key-env'] || (options.manual ? DEFAULT_API_KEY_ENV : DEFAULT_MCP_TOKEN_ENV)).trim() || DEFAULT_MCP_TOKEN_ENV;
   const shouldScaffoldSkills = Boolean(options.skills || mode === 'repair');
 
   if (options['dry-run']) {
@@ -587,13 +858,19 @@ async function runInit(args, mode = 'init') {
       serverName,
       skillsDir: shouldScaffoldSkills ? path.join(workspaceRoot, '.agents', 'skills') : null,
       confirmationRequired: !options.yes,
+      deviceAuthorization: !options.manual,
+      dashboardURL: dashboardURL || null,
       urlInfo,
-      config: nextConfig,
+      config: mergeMcpConfig(current.error ? {} : current.data, blockName, serverName, buildMcpServer({
+        url: urlInfo.url,
+        header: String(options.header || 'apikey').trim() || 'apikey',
+        apiKeyEnv,
+      })),
     };
     if (options.json) {
       console.log(JSON.stringify(payload, null, 2));
     } else {
-      printHeader('Dry run: no files were changed');
+      printHeader();
       printPanel('Planned MCP Setup', [
         ['MCP origin', urlInfo.origin],
         ['Endpoint', urlInfo.url],
@@ -601,6 +878,8 @@ async function runInit(args, mode = 'init') {
         ['Config file', configPath],
         ['MCP block', `${blockName}.${serverName}`],
         ['Skills', shouldScaffoldSkills ? payload.skillsDir : 'not requested'],
+        ['Auth flow', options.manual ? 'manual env variable' : 'dashboard device authorization'],
+        ['Dashboard', dashboardURL || urlInfo.origin],
         ['Confirmation', options.yes ? 'skipped with --yes' : 'browser approval required'],
       ], urlInfo.warnings.length > 0 ? color('yellow', urlInfo.warnings.join(' ')) : color('green', 'Endpoint checks passed.'));
     }
@@ -618,7 +897,33 @@ async function runInit(args, mode = 'init') {
     });
   }
 
+  let issuedToken = '';
+  let issuedTokenMeta = null;
+  if (!options.manual) {
+    issuedTokenMeta = await authorizeMcpDevice({
+      urlInfo,
+      workspaceRoot,
+      editor,
+      securityLevel: String(options['security-level'] || 'Restricted'),
+      dashboardURL,
+      quiet: Boolean(options.json),
+    });
+    issuedToken = issuedTokenMeta.token;
+  }
+
+  const serverConfig = buildMcpServer({
+    url: urlInfo.url,
+    header: String(options.header || 'apikey').trim() || 'apikey',
+    apiKeyEnv,
+    token: issuedToken,
+  });
+  const nextConfig = mergeMcpConfig(current.error ? {} : current.data, blockName, serverName, serverConfig);
+
   writeJsonStable(configPath, nextConfig);
+  let gitignoreUpdated = false;
+  if (issuedToken) {
+    gitignoreUpdated = ensureGitignoreEntry(workspaceRoot, '.vscode/mcp.json');
+  }
   let skillsDir = null;
   if (shouldScaffoldSkills) {
     skillsDir = scaffoldSkills(workspaceRoot, Boolean(options.force));
@@ -629,18 +934,35 @@ async function runInit(args, mode = 'init') {
     return;
   }
 
-  printHeader(mode === 'repair' ? 'MCP setup repaired' : 'MCP setup ready');
+  const apiKey = issuedToken || String(process.env[apiKeyEnv] || '').trim();
+  let connectionResult = null;
+  if (apiKey) {
+    connectionResult = await validateMcpConnection({
+      url: urlInfo.url,
+      apiKey,
+      header: String(options.header || 'apikey').trim() || 'apikey',
+    });
+  }
+
+  printHeader();
   printPanel('Installed Configuration', [
     ['MCP origin', urlInfo.origin],
     ['Config file', configPath],
     ['Registered', `${blockName}.${serverName}`],
     ['Skills', skillsDir || 'not requested'],
     ['API key source', apiKeyEnv],
-  ], `${color('green', 'Next')} Set ${apiKeyEnv} in your editor environment before using MCP.`);
+    ['MCP token', issuedTokenMeta?.tokenPrefix || (issuedToken ? 'issued' : 'not issued')],
+    ['Git ignore', gitignoreUpdated ? '.vscode/mcp.json added' : issuedToken ? '.vscode/mcp.json already ignored' : 'not needed'],
+  ], apiKey
+    ? `${color('green', 'Next')} Reload your editor MCP session after reviewing the validation below.`
+    : `${color('yellow', 'Next')} Set ${apiKeyEnv} in your editor environment, then run: npx -y ozybase@latest doctor --connect`);
+  if (connectionResult) {
+    printConnectionValidation(connectionResult, apiKeyEnv);
+  }
 }
 
 function collectDoctorState(args) {
-  const options = parseOptions(args, { cwd: 'value' });
+  const options = parseOptions(args, { cwd: 'value', url: 'value', 'api-key-env': 'value', header: 'value' });
   const workspaceRoot = findWorkspaceRoot(options.cwd || process.cwd(), Boolean(options.cwd));
   const configPath = path.join(workspaceRoot, '.vscode', 'mcp.json');
   const config = readJsonIfExists(configPath);
@@ -664,31 +986,58 @@ function collectDoctorState(args) {
 
   const skillsDir = path.join(workspaceRoot, '.agents', 'skills');
   checks.push({ name: 'skillsDir', ok: fs.existsSync(skillsDir), detail: skillsDir });
-  checks.push({ name: DEFAULT_API_KEY_ENV, ok: Boolean(process.env[DEFAULT_API_KEY_ENV]), detail: process.env[DEFAULT_API_KEY_ENV] ? 'set' : 'not set' });
+  const configuredURL = config.error ? '' : extractConfiguredMcpURL(config.data, DEFAULT_SERVER_NAME);
+  const configuredAuth = config.error ? { envName: DEFAULT_MCP_TOKEN_ENV, token: '' } : extractConfiguredMcpAuth(config.data, DEFAULT_SERVER_NAME);
+  const apiKeyEnv = String(options['api-key-env'] || configuredAuth.envName || DEFAULT_MCP_TOKEN_ENV).trim() || DEFAULT_MCP_TOKEN_ENV;
+  const configuredToken = configuredAuth.token;
+  const url = String(options.url || configuredURL || '').trim();
+  const hasAuth = Boolean(process.env[apiKeyEnv] || configuredToken);
+  checks.push({ name: 'mcpURL', ok: Boolean(url), detail: url || 'missing' });
+  checks.push({ name: apiKeyEnv, ok: hasAuth, detail: process.env[apiKeyEnv] ? 'set in environment' : configuredToken ? 'set in MCP config' : 'not set' });
 
-  return { workspaceRoot, configPath, checks };
+  return { workspaceRoot, configPath, checks, url, apiKeyEnv, configuredToken, header: String(options.header || 'apikey').trim() || 'apikey' };
 }
 
-function runDoctor(args) {
-  const options = parseOptions(args, { cwd: 'value' });
+async function runDoctor(args) {
+  const options = parseOptions(args, { cwd: 'value', url: 'value', 'api-key-env': 'value', header: 'value' });
   const state = collectDoctorState(args);
-  const ok = state.checks.every((check) => check.ok || check.name === DEFAULT_API_KEY_ENV || check.name === 'skillsDir');
+  let connectionResult = null;
+  if (options.connect) {
+    const apiKey = String(process.env[state.apiKeyEnv] || state.configuredToken || '').trim();
+    if (state.url && apiKey) {
+      connectionResult = await validateMcpConnection({ url: state.url, apiKey, header: state.header });
+    } else {
+      connectionResult = {
+        ok: false,
+        status: 'skipped',
+        checks: [
+          { name: 'mcpConnectReady', ok: false, detail: state.url ? `${state.apiKeyEnv} is not set` : 'MCP URL is missing' },
+        ],
+      };
+    }
+  }
+  const ok = state.checks.every((check) => check.ok || check.name === state.apiKeyEnv || check.name === 'skillsDir') && (!connectionResult || connectionResult.ok);
 
   if (options.json) {
-    console.log(JSON.stringify({ ok, ...state }, null, 2));
+    console.log(JSON.stringify({ ok, ...state, connection: connectionResult }, null, 2));
   } else {
-    printHeader('Doctor report');
+    printHeader();
     printPanel('Workspace', [
       ['Root', state.workspaceRoot],
       ['MCP config', state.configPath],
+      ['MCP URL', state.url || 'missing'],
     ]);
     console.log(color('bold', 'Checks'));
     for (const check of state.checks) {
       console.log(`${statusLabel(check.ok)} ${color('gray', check.name.padEnd(18))} ${check.detail}`);
     }
-    if (!process.env[DEFAULT_API_KEY_ENV]) {
+    if (!process.env[state.apiKeyEnv]) {
       console.log('');
-      console.log(`${color('yellow', 'Note')} ${DEFAULT_API_KEY_ENV} is required when the MCP bridge runs.`);
+      console.log(`${color('yellow', 'Note')} ${state.apiKeyEnv} is required when the MCP bridge runs.`);
+    }
+    if (connectionResult) {
+      console.log('');
+      printConnectionValidation(connectionResult, state.apiKeyEnv);
     }
   }
 
@@ -748,6 +1097,10 @@ async function run() {
       printUsage();
       return;
     }
+    if (command === 'connect') {
+      await runInit(args.slice(1));
+      return;
+    }
     if (command === 'init') {
       await runInit(args.slice(1));
       return;
@@ -757,7 +1110,7 @@ async function run() {
       return;
     }
     if (command === 'doctor') {
-      runDoctor(args.slice(1));
+      await runDoctor(args.slice(1));
       return;
     }
     if (command === 'version' || command === '--version' || command === '-v') {

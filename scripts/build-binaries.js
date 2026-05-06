@@ -2,7 +2,7 @@ const { spawnSync } = require('child_process');
 const path = require('path');
 
 const pkgDir = __dirname ? path.resolve(__dirname, '..') : process.cwd();
-const rootDir = path.resolve(pkgDir, '..', '..', '..');
+const rootDir = path.resolve(pkgDir, '..', 'OzyBase');
 
 const targets = [
   { goos: 'windows', goarch: 'amd64', out: 'ozybase-win-x64.exe' },
