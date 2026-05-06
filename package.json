@@ -1,6 +1,6 @@
 {
   "name": "ozybase",
-  "version": "1.2.3",
+  "version": "1.2.4",
   "description": "OzyBase CLI - one-time project connection and native MCP bootstrap",
   "license": "MIT",
   "main": "index.js",
